@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Map Of My Journey · 个人旅行与会议足迹地球仪</title>
+  <!-- Tailwind CSS 样式库 -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- 3D 地球仪核心库 Globe.gl -->
+  <script src="https://unpkg.com/globe.gl"></script>
+  <!-- EXIF 元数据极速解析库 (支持 HEIC/JPG) -->
+  <script src="https://cdn.jsdelivr.net/npm/exifr/dist/full.umd.js"></script>
+  <!-- Apple HEIC 格式转码库 -->
+  <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
+
+  <style>
+    body { margin: 0; overflow: hidden; background-color: #030712; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    /* 自定义滚动条 */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 9999px; }
+    /* 地球上的照片标记点样式 */
+    .globe-photo-marker {
+      width: 44px;
+      height: 44px;
+      border-radius: 9999px;
+      border: 2.5px solid #38bdf8;
+      box-shadow: 0 0 15px rgba(56, 189, 248, 0.7);
+      overflow: hidden;
+      cursor: pointer;
+      transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.2s;
+      background: #0f172a;
+      position: relative;
+      pointer-events: auto;
+    }
+    .globe-photo-marker:hover {
+      transform: scale(1.35);
+      border-color: #facc15;
+      z-index: 50;
+    }
+    .globe-photo-marker img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .globe-marker-label {
+      position: absolute;
+      top: 48px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(4px);
+      color: #f8fafc;
+      font-size: 11px;
+      padding: 2px 7px;
+      border-radius: 6px;
+      white-space: nowrap;
+      border: 1px solid rgba(255,255,255,0.12);
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body class="text-slate-100 select-none">
+
+  <!-- 3D 地球仪全屏容器 -->
+  <div id="globeViz" class="w-screen h-screen"></div>
+
+  <!-- 顶部导航栏 -->
+  <header class="fixed top-4 left-4 right-4 z-20 flex flex-wrap items-center justify-between gap-3 pointer-events-none">
+    <div class="bg-slate-900/75 backdrop-blur-md border border-slate-700/60 px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-3 pointer-events-auto">
+      <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-400 to-indigo-600 flex items-center justify-center text-lg shadow-md">
+        🌍
+      </div>
+      <div>
+        <h1 class="text-sm sm:text-base font-bold tracking-wide bg-gradient-to-r from-sky-300 to-indigo-300 bg-clip-text text-transparent">
+          Map Of My Journey
+        </h1>
+        <p class="text-[11px] text-slate-400" id="statsText">正在加载足迹数据...</p>
+      </div>
+    </div>
+
+    <!-- 右上角操作按钮组 -->
+    <div class="flex items-center gap-2 pointer-events-auto">
+      <button onclick="startTour()" id="tourBtn" class="bg-slate-900/80 hover:bg-slate-800 backdrop-blur-md border border-slate-700/70 text-xs sm:text-sm px-3.5 py-2.5 rounded-xl flex items-center gap-1.5 transition shadow-lg">
+        <span>🎬</span> <span id="tourBtnText">巡航回放</span>
+      </button>
+      <button onclick="openAddModal()" class="bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-medium text-xs sm:text-sm px-4 py-2.5 rounded-xl flex items-center gap-1.5 shadow-lg shadow-sky-500/25 transition">
+        <span>📸</span> <span>上传照片 / 新建记录</span>
+      </button>
+      <div class="relative group">
+        <button class="bg-slate-900/80 hover:bg-slate-800 backdrop-blur-md border border-slate-700/70 text-xs sm:text-sm px-3 py-2.5 rounded-xl transition shadow-lg">
+          ⚙️ 数据备份
+        </button>
+        <div class="absolute right-0 mt-2 w-44 bg-slate-900/95 backdrop-blur-xl border border-slate-700 rounded-xl shadow-2xl py-1.5 hidden group-hover:block">
+          <button onclick="exportData()" class="w-full text-left px-4 py-2 text-xs hover:bg-slate-800 flex items-center gap-2">
+            📤 导出全部回忆 (.json)
+          </button>
+          <label class="w-full text-left px-4 py-2 text-xs hover:bg-slate-800 flex items-center gap-2 cursor-pointer">
+            📥 导入备份文件
+            <input type="file" accept=".json" class="hidden" onchange="importData(event)" />
+          </label>
+          <hr class="border-slate-800 my-1" />
+          <button onclick="resetDemoData()" class="w-full text-left px-4 py-2 text-xs text-amber-400 hover:bg-slate-800 flex items-center gap-2">
+            🔄 恢复示例数据
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- 底部时间轴横向卡片栏 -->
+  <section class="fixed bottom-4 left-4 right-4 z-20 pointer-events-none flex flex-col gap-2">
+    <div id="timelineList" class="flex items-center gap-3 overflow-x-auto pb-1 pt-1 px-1 pointer-events-auto">
+      <!-- 动态渲染足迹小卡片 -->
+    </div>
+  </section>
+
+  <!-- 右侧：回忆详情与实况照片抽屉 -->
+  <aside id="detailDrawer" class="fixed top-20 bottom-28 right-4 w-80 sm:w-96 bg-slate-900/85 backdrop-blur-xl border border-slate-700/70 rounded-2xl shadow-2xl z-30 p-4 flex flex-col justify-between transition-all duration-300 translate-x-[120%]">
+    <div class="overflow-y-auto pr-1 space-y-3">
+      <div class="flex items-start justify-between gap-2">
+        <div>
+          <span id="detailCategory" class="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-sky-500/20 text-sky-300 border border-sky-500/30">
+            💼 会议记录
+          </span>
+          <h2 id="detailTitle" class="text-lg font-bold mt-1.5 text-white">标题</h2>
+          <p id="detailMeta" class="text-xs text-slate-400 mt-0.5">📍 地点 · 📅 日期</p>
+        </div>
+        <button onclick="closeDetailDrawer()" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800">
+          ✕
+        </button>
+      </div>
+
+      <!-- 照片 / 实况照片展示框 -->
+      <div id="livePhotoBox" class="relative w-full h-64 rounded-xl overflow-hidden bg-slate-950 border border-slate-800 group cursor-pointer"
+           onmouseenter="playLiveVideo()" onmouseleave="stopLiveVideo()"
+           ontouchstart="playLiveVideo()" ontouchend="stopLiveVideo()">
+        <img id="detailImage" src="" alt="回忆照片" class="w-full h-full object-cover transition-transform duration-500" />
+        <video id="detailVideo" src="" playsinline class="absolute inset-0 w-full h-full object-cover opacity-0 pointer-events-none transition-opacity duration-300"></video>
+        <!-- LIVE 标志 -->
+        <div id="liveBadge" class="hidden absolute top-2.5 left-2.5 bg-black/55 backdrop-blur-md px-2.5 py-1 rounded-full flex items-center gap-1.5 text-[11px] font-medium text-white">
+          <span id="liveDot" class="w-2 h-2 rounded-full bg-amber-400"></span>
+          <span>LIVE 实况 (悬停/长按播放)</span>
+        </div>
+      </div>
+
+      <!-- 会议/旅行笔记内容 -->
+      <div class="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3">
+        <h4 class="text-xs font-semibold text-slate-400 mb-1">📝 会议纪要与旅行回忆</h4>
+        <p id="detailNotes" class="text-xs sm:text-sm text-slate-200 whitespace-pre-line leading-relaxed"></p>
+      </div>
+
+      <div id="detailCoords" class="text-[11px] text-slate-500 font-mono"></div>
+    </div>
+
+    <div class="pt-3 border-t border-slate-800 flex items-center justify-between">
+      <button onclick="deleteCurrentMemory()" class="text-xs text-rose-400 hover:text-rose-300 px-2.5 py-1.5 rounded-lg hover:bg-rose-500/10 transition">
+        🗑️ 删除此条记录
+      </button>
+      <button onclick="closeDetailDrawer()" class="text-xs bg-slate-800 hover:bg-slate-700 px-4 py-1.5 rounded-lg transition">
+        关闭
+      </button>
+    </div>
+  </aside>
+
+  <!-- 弹窗：上传照片 & 新建回忆 -->
+  <div id="addModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 hidden items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-5 shadow-2xl max-h-[90vh] overflow-y-auto space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div>
+          <h3 class="text-base font-bold text-white">📸 上传 iPhone 照片生成足迹</h3>
+          <p class="text-xs text-slate-400 mt-0.5">自动读取照片 EXIF 中的 GPS 经纬度与拍摄日期</p>
+        </div>
+        <button onclick="closeAddModal()" class="text-slate-400 hover:text-white">✕</button>
+      </div>
+
+      <!-- 第一步：上传图片与可选实况视频 -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label class="border-2 border-dashed border-sky-500/50 hover:border-sky-400 bg-sky-500/5 rounded-xl p-3 flex flex-col items-center justify-center text-center cursor-pointer transition h-32 relative overflow-hidden">
+          <input type="file" id="photoInput" accept="image/*,.heic,.HEIC" class="hidden" onchange="handlePhotoSelect(event)" />
+          <img id="previewImg" class="absolute inset-0 w-full h-full object-cover hidden" />
+          <div id="photoUploadHint" class="space-y-1">
+            <div class="text-2xl">🖼️</div>
+            <div class="text-xs font-medium text-sky-300">点击选择照片 (必选)</div>
+            <div class="text-[10px] text-slate-400">支持 JPG / PNG / iPhone HEIC 原图</div>
+          </div>
+        </label>
+
+        <label class="border-2 border-dashed border-slate-700 hover:border-amber-400/60 bg-slate-800/30 rounded-xl p-3 flex flex-col items-center justify-center text-center cursor-pointer transition h-32">
+          <input type="file" id="videoInput" accept="video/quicktime,video/mp4,.mov,.MOV" class="hidden" onchange="handleVideoSelect(event)" />
+          <div class="space-y-1">
+            <div class="text-2xl">🎞️</div>
+            <div class="text-xs font-medium text-amber-300" id="videoUploadText">关联实况视频 (可选)</div>
+            <div class="text-[10px] text-slate-400">上传同名 .MOV/.MP4 激活实况效果</div>
+          </div>
+        </label>
+      </div>
+
+      <!-- EXIF 解析状态提示条 -->
+      <div id="exifStatus" class="text-xs bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 flex items-center justify-between">
+        <span>💡 提示：在 iPhone 选图时请开启底部“选项 -> 包含位置信息”</span>
+      </div>
+
+      <!-- 表单字段 -->
+      <div class="space-y-3">
+        <div class="grid grid-cols-3 gap-2">
+          <div class="col-span-2">
+            <label class="text-xs text-slate-400 block mb-1">回忆 / 会议标题 *</label>
+            <input id="inputTitle" type="text" placeholder="例如：东京 AI 开发者峰会 / 涩谷街拍" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-400" />
+          </div>
+          <div>
+            <label class="text-xs text-slate-400 block mb-1">分类标签</label>
+            <select id="inputCategory" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-2 text-xs text-white focus:outline-none focus:border-sky-400">
+              <option value="💼 会议记录">💼 会议记录</option>
+              <option value="✈️ 旅行足迹">✈️ 旅行足迹</option>
+              <option value="🍽️ 探店美食">🍽️ 探店美食</option>
+              <option value="🌟 灵感瞬间">🌟 灵感瞬间</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="text-xs text-slate-400 block mb-1">地点名称 (自动识别或手填)</label>
+            <input id="inputLocation" type="text" placeholder="例如：日本 · 东京" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-400" />
+          </div>
+          <div>
+            <label class="text-xs text-slate-400 block mb-1">拍摄/会议日期</label>
+            <input id="inputDate" type="date" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-400" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="text-xs text-slate-400 block mb-1">纬度 (Latitude) *</label>
+            <input id="inputLat" type="number" step="any" placeholder="例如 35.6895" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono" />
+          </div>
+          <div>
+            <label class="text-xs text-slate-400 block mb-1">经度 (Longitude) *</label>
+            <input id="inputLng" type="number" step="any" placeholder="例如 139.6917" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono" />
+          </div>
+        </div>
+        <p class="text-[11px] text-slate-400">
+          🎯 如果照片不含 GPS 信息，你可以先关闭弹窗，**直接用鼠标点击地球仪上的任意位置**，系统会自动填入该点经纬度！
+        </p>
+
+        <div>
+          <label class="text-xs text-slate-400 block mb-1">会议纪要 / 旅行随笔</label>
+          <textarea id="inputNotes" rows="3" placeholder="记录当时的会议核心结论、见到的朋友或旅途心情..." class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-400"></textarea>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+        <button onclick="closeAddModal()" class="px-4 py-2 rounded-xl text-xs bg-slate-800 hover:bg-slate-700">取消</button>
+        <button onclick="saveMemory()" id="saveBtn" class="px-5 py-2 rounded-xl text-xs font-semibold bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white shadow-lg">
+          ✨ 保存并定位到地球
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /**************************************************************
+     * 1. IndexedDB 本地数据库封装 (支持存储高清图片与实况视频)
+     **************************************************************/
+    const DB_NAME = 'JourneyGlobeDB';
+    const STORE_NAME = 'memories';
+    let dbInstance = null;
+
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        if (dbInstance) return resolve(dbInstance);
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains(STORE_NAME)) {
+            db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+          }
+        };
+        req.onsuccess = (e) => {
+          dbInstance = e.target.result;
+          resolve(dbInstance);
+        };
+        req.onerror = (e) => reject(e.target.error);
+      });
+    }
+
+    async function getAllMemoriesFromDB() {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const req = tx.objectStore(STORE_NAME).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = (e) => reject(e);
+      });
+    }
+
+    async function saveMemoryToDB(item) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).put(item);
+        tx.oncomplete = () => resolve();
+        tx.onerror = (e) => reject(e);
+      });
+    }
+
+    async function deleteMemoryFromDB(id) {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).delete(id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = (e) => reject(e);
+      });
+    }
+
+    async function clearAllMemoriesDB() {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).clear();
+        tx.oncomplete = () => resolve();
+        tx.onerror = (e) => reject(e);
+      });
+    }
+
+    /**************************************************************
+     * 2. 默认示例足迹数据（首次打开展示效果，可随时删除或新增）
+     **************************************************************/
+    const DEFAULT_MEMORIES = [
+      {
+        id: 'demo-1',
+        title: '上海 · 全球开发者大会主题演讲',
+        category: '💼 会议记录',
+        locationName: '中国 · 上海浦东',
+        date: '2025-05-18',
+        lat: 31.2397,
+        lng: 121.4998,
+        notes: '与产品团队对齐了下一代 3D 可视化工作流方案。会后在外滩拍下了这张傍晚天际线。',
+        imageDataUrl: 'https://images.unsplash.com/photo-1538428494232-9c0d8a3ab403?auto=format&fit=crop&w=800&q=80',
+        videoDataUrl: null
+      },
+      {
+        id: 'demo-2',
+        title: '东京 · 亚太区技术研讨与街拍',
+        category: '💼 会议记录',
+        locationName: '日本 · 东京新宿',
+        date: '2025-08-12',
+        lat: 35.6895,
+        lng: 139.6917,
+        notes: '第二天分组讨论非常高效，晚上在涩谷和新宿街头散步，记录下霓虹灯下的城市节奏。',
+        imageDataUrl: 'https://images.unsplash.com/photo-1503899036084-c55cdd92da26?auto=format&fit=crop&w=800&q=80',
+        videoDataUrl: null
+      },
+      {
+        id: 'demo-3',
+        title: '苏黎世 · 欧洲秋季学术访问与阿尔卑斯行',
+        category: '✈️ 旅行足迹',
+        locationName: '瑞士 · 苏黎世',
+        date: '2025-11-04',
+        lat: 47.3769,
+        lng: 8.5417,
+        notes: '在苏黎世联邦理工进行了为期三天的交流访问，周末乘火车前往雪山脚下。',
+        imageDataUrl: 'https://images.unsplash.com/photo-1515488764276-beab7607c1e6?auto=format&fit=crop&w=800&q=80',
+        videoDataUrl: null
+      },
+      {
+        id: 'demo-4',
+        title: '旧金山 · 年度产品发布会复盘',
+        category: '💼 会议记录',
+        locationName: '美国 · 旧金山湾区',
+        date: '2026-02-20',
+        lat: 37.7749,
+        lng: -122.4194,
+        notes: '金门大桥的晨雾依然壮观。本次会议确定了全年的海外拓展路线图。',
+        imageDataUrl: 'https://images.unsplash.com/photo-1501594907352-04cda38ebc29?auto=format&fit=crop&w=800&q=80',
+        videoDataUrl: null
+      }
+    ];
+
+    /**************************************************************
+     * 3. 全局状态与 3D 地球仪初始化
+     **************************************************************/
+    let memories = [];
+    let activeMemoryId = null;
+    let globe = null;
+    let isTourPlaying = false;
+    let tourTimer = null;
+
+    // 临时存放上传中的图片/视频 DataURL
+    let tempImageDataUrl = '';
+    let tempVideoDataUrl = '';
+
+    async function initApp() {
+      memories = await getAllMemoriesFromDB();
+      if (memories.length === 0 && !localStorage.getItem('journey_initialized')) {
+        for (const item of DEFAULT_MEMORIES) {
+          await saveMemoryToDB(item);
+        }
+        localStorage.setItem('journey_initialized', 'true');
+        memories = await getAllMemoriesFromDB();
+      }
+
+      initGlobe();
+      refreshUI();
+    }
+
+    function initGlobe() {
+      const container = document.getElementById('globeViz');
+      globe = Globe()(container)
+        .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg')
+        .bumpImageUrl('https://unpkg.com/three-globe/example/img/earth-topology.png')
+        .backgroundImageUrl('https://unpkg.com/three-globe/example/img/night-sky.png')
+        .showAtmosphere(true)
+        .atmosphereColor('#38bdf8')
+        .atmosphereAltitude(0.18)
+        // HTML 照片标记层
+        .htmlElementsData([])
+        .htmlLat(d => d.lat)
+        .htmlLng(d => d.lng)
+        .htmlAltitude(0.02)
+        .htmlElement(d => {
+          const wrapper = document.createElement('div');
+          wrapper.style.position = 'relative';
+
+          const el = document.createElement('div');
+          el.className = 'globe-photo-marker';
+          el.innerHTML = `<img src="${d.imageDataUrl}" alt="${d.title}" />`;
+          el.onclick = (e) => {
+            e.stopPropagation();
+            focusMemory(d.id);
+          };
+
+          const label = document.createElement('div');
+          label.className = 'globe-marker-label';
+          label.innerText = d.locationName || d.title;
+
+          wrapper.appendChild(el);
+          wrapper.appendChild(label);
+          return wrapper;
+        })
+        // 飞线层（按时间顺序连接各个旅行/会议地点）
+        .arcsData([])
+        .arcColor(() => ['#38bdf8', '#facc15'])
+        .arcDashLength(0.45)
+        .arcDashGap(0.2)
+        .arcDashAnimateTime(2200)
+        .arcStroke(0.65)
+        .arcAltitudeAutoScale(0.35)
+        // 点击地球任意位置可拾取经纬度
+        .onGlobeClick(({ lat, lng }) => {
+          document.getElementById('inputLat').value = lat.toFixed(5);
+          document.getElementById('inputLng').value = lng.toFixed(5);
+          reverseGeocode(lat, lng);
+        });
+
+      // 初始视角与自转控制
+      globe.controls().autoRotate = true;
+      globe.controls().autoRotateSpeed = 0.45;
+      globe.pointOfView({ lat: 30, lng: 115, altitude: 2.2 });
+
+      window.addEventListener('resize', () => {
+        globe.width(window.innerWidth).height(window.innerHeight);
+      });
+    }
+
+    /**************************************************************
+     * 4. 界面数据刷新（地球标记、飞线、底部时间轴）
+     **************************************************************/
+    function refreshUI() {
+      // 按日期排序
+      memories.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+      // 更新顶部统计
+      const liveCount = memories.filter(m => m.videoDataUrl).length;
+      document.getElementById('statsText').innerText =
+        `已记录 ${memories.length} 处足迹 · 包含 ${liveCount} 张实况回忆 (点击地球任意处可拾取坐标)`;
+
+      // 更新地球上的照片标记
+      globe.htmlElementsData(memories);
+
+      // 生成时间轴飞线
+      const arcs = [];
+      for (let i = 0; i < memories.length - 1; i++) {
+        arcs.push({
+          startLat: memories[i].lat,
+          startLng: memories[i].lng,
+          endLat: memories[i + 1].lat,
+          endLng: memories[i + 1].lng
+        });
+      }
+      globe.arcsData(arcs);
+
+      // 渲染底部时间轴卡片
+      const listEl = document.getElementById('timelineList');
+      if (memories.length === 0) {
+        listEl.innerHTML = `
+          <div class="bg-slate-900/80 backdrop-blur-md border border-slate-700/70 rounded-xl px-4 py-3 text-xs text-slate-400">
+            还没有任何足迹记录，点击右上角「上传照片 / 新建记录」开启你的地球回忆吧！
+          </div>`;
+        return;
+      }
+
+      listEl.innerHTML = memories.map((m, idx) => `
+        <div onclick="focusMemory('${m.id}')"
+             class="flex-shrink-0 w-60 bg-slate-900/85 hover:bg-slate-800/90 backdrop-blur-md border ${activeMemoryId === m.id ? 'border-sky-400 ring-2 ring-sky-400/30' : 'border-slate-700/70'} rounded-xl p-2.5 flex items-center gap-3 cursor-pointer transition shadow-xl">
+          <div class="relative w-12 h-12 rounded-lg overflow-hidden flex-shrink-0 bg-slate-800">
+            <img src="${m.imageDataUrl}" class="w-full h-full object-cover" />
+            ${m.videoDataUrl ? `<span class="absolute top-0.5 right-0.5 w-2.5 h-2.5 rounded-full bg-amber-400 ring-2 ring-black" title="实况照片"></span>` : ''}
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center justify-between text-[10px] text-sky-400 font-medium">
+              <span>#${idx + 1} · ${m.date}</span>
+            </div>
+            <h4 class="text-xs font-bold text-white truncate mt-0.5">${m.title}</h4>
+            <p class="text-[11px] text-slate-400 truncate">📍 ${m.locationName || '未知地点'}</p>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    /**************************************************************
+     * 5. 聚焦某个地点 & 展开右侧回忆详情 (含实况播放)
+     **************************************************************/
+    function focusMemory(id) {
+      const item = memories.find(m => m.id === id);
+      if (!item) return;
+
+      activeMemoryId = id;
+      globe.controls().autoRotate = false;
+
+      // 地球镜头平滑飞行至该坐标
+      globe.pointOfView({ lat: item.lat, lng: item.lng, altitude: 0.85 }, 1400);
+
+      // 填充右侧详情面板
+      document.getElementById('detailCategory').innerText = item.category || '💼 会议记录';
+      document.getElementById('detailTitle').innerText = item.title;
+      document.getElementById('detailMeta').innerText = `📍 ${item.locationName || '未知地点'}  ·  📅 ${item.date}`;
+      document.getElementById('detailImage').src = item.imageDataUrl;
+      document.getElementById('detailNotes').innerText = item.notes || '暂无详细文字记录。';
+      document.getElementById('detailCoords').innerText = `GPS: ${Number(item.lat).toFixed(4)}°, ${Number(item.lng).toFixed(4)}°`;
+
+      const videoEl = document.getElementById('detailVideo');
+      const liveBadge = document.getElementById('liveBadge');
+      if (item.videoDataUrl) {
+        videoEl.src = item.videoDataUrl;
+        liveBadge.classList.remove('hidden');
+      } else {
+        videoEl.src = '';
+        liveBadge.classList.add('hidden');
+      }
+
+      document.getElementById('detailDrawer').classList.remove('translate-x-[120%]');
+      refreshUI();
+    }
+
+    function closeDetailDrawer() {
+      stopLiveVideo();
+      document.getElementById('detailDrawer').classList.add('translate-x-[120%]');
+      activeMemoryId = null;
+      globe.controls().autoRotate = true;
+      refreshUI();
+    }
+
+    function playLiveVideo() {
+      const videoEl = document.getElementById('detailVideo');
+      if (!videoEl.src || videoEl.src === window.location.href) return;
+      videoEl.currentTime = 0;
+      videoEl.classList.remove('opacity-0');
+      document.getElementById('liveDot').classList.add('animate-ping');
+      videoEl.play().catch(() => {});
+    }
+
+    function stopLiveVideo() {
+      const videoEl = document.getElementById('detailVideo');
+      videoEl.pause();
+      videoEl.classList.add('opacity-0');
+      document.getElementById('liveDot').classList.remove('animate-ping');
+    }
+
+    async function deleteCurrentMemory() {
+      if (!activeMemoryId) return;
+      if (!confirm('确定要删除这条足迹回忆吗？')) return;
+      await deleteMemoryFromDB(activeMemoryId);
+      memories = await getAllMemoriesFromDB();
+      closeDetailDrawer();
+      refreshUI();
+    }
+
+    /**************************************************************
+     * 6. 照片上传、HEIC 转换、EXIF 经纬度提取与逆地理编码
+     **************************************************************/
+    function openAddModal() {
+      document.getElementById('addModal').classList.remove('hidden');
+      document.getElementById('addModal').classList.add('flex');
+      if (!document.getElementById('inputDate').value) {
+        document.getElementById('inputDate').value = new Date().toISOString().split('T')[0];
+      }
+    }
+
+    function closeAddModal() {
+      document.getElementById('addModal').classList.add('hidden');
+      document.getElementById('addModal').classList.remove('flex');
+    }
+
+    async function handlePhotoSelect(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const statusEl = document.getElementById('exifStatus');
+      statusEl.innerHTML = `<span class="text-sky-400">⏳ 正在读取照片 EXIF 位置信息并处理图像...</span>`;
+
+      try {
+        // 1. 先直接从原始文件 (包括 HEIC/JPG) 中读取 EXIF GPS 和拍摄日期
+        const gps = await exifr.gps(file).catch(() => null);
+        const meta = await exifr.parse(file, ['DateTimeOriginal', 'CreateDate']).catch(() => null);
+
+        if (meta && (meta.DateTimeOriginal || meta.CreateDate)) {
+          const dt = new Date(meta.DateTimeOriginal || meta.CreateDate);
+          if (!isNaN(dt)) {
+            document.getElementById('inputDate').value = dt.toISOString().split('T')[0];
+          }
+        }
+
+        if (gps && gps.latitude && gps.longitude) {
+          const lat = gps.latitude;
+          const lng = gps.longitude;
+          document.getElementById('inputLat').value = lat.toFixed(6);
+          document.getElementById('inputLng').value = lng.toFixed(6);
+          statusEl.innerHTML = `<span class="text-emerald-400">✅ 成功从照片提取定位：(${lat.toFixed(4)}, ${lng.toFixed(4)})，正在查询地名...</span>`;
+          reverseGeocode(lat, lng);
+          globe.pointOfView({ lat, lng, altitude: 1.1 }, 1200);
+        } else {
+          statusEl.innerHTML = `<span class="text-amber-400">⚠️ 未在照片中检测到 GPS 坐标（可在下方手动填写，或直接点击背景地球拾取）</span>`;
+        }
+
+        // 2. 如果是苹果 .HEIC 格式，先用 heic2any 转换为 JPG Blob
+        let imageBlob = file;
+        const isHeic = file.name.toLowerCase().endsWith('.heic') || file.type === 'image/heic';
+        if (isHeic) {
+          statusEl.innerHTML += ` <span class="text-sky-300">(正在转换 iPhone HEIC 格式...)</span>`;
+          const converted = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.85 });
+          imageBlob = Array.isArray(converted) ? converted[0] : converted;
+        }
+
+        // 3. 将图片适度压缩为 DataURL 以便极速存储与渲染
+        tempImageDataUrl = await compressImageToDataUrl(imageBlob, 1400, 0.85);
+        const previewImg = document.getElementById('previewImg');
+        previewImg.src = tempImageDataUrl;
+        previewImg.classList.remove('hidden');
+        document.getElementById('photoUploadHint').classList.add('opacity-0');
+      } catch (err) {
+        console.error(err);
+        statusEl.innerHTML = `<span class="text-rose-400">❌ 照片解析出错：${err.message || '请尝试上传 JPG/PNG 格式'}</span>`;
+      }
+    }
+
+    function handleVideoSelect(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        tempVideoDataUrl = e.target.result;
+        document.getElementById('videoUploadText').innerText = `✅ 已关联: ${file.name}`;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    // 图像缩放压缩辅助函数
+    function compressImageToDataUrl(blob, maxWidth = 1400, quality = 0.85) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(blob);
+        img.onload = () => {
+          let w = img.width;
+          let h = img.height;
+          if (w > maxWidth) {
+            h = Math.round((h * maxWidth) / w);
+            w = maxWidth;
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          URL.revokeObjectURL(url);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.onerror = reject;
+        img.src = url;
+      });
+    }
+
+    // OpenStreetMap Nominatim 免费逆地理编码（把经纬度自动转为国家与城市名）
+    async function reverseGeocode(lat, lng) {
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=10&accept-language=zh-CN`);
+        const data = await res.json();
+        if (data && data.address) {
+          const addr = data.address;
+          const country = addr.country || '';
+          const city = addr.city || addr.town || addr.state || addr.county || '';
+          const placeName = [country, city].filter(Boolean).join(' · ') || data.display_name.split(',')[0];
+          document.getElementById('inputLocation').value = placeName;
+        }
+      } catch (e) {
+        console.warn('逆地理编码请求失败，可手动填写地点名称', e);
+      }
+    }
+
+    async function saveMemory() {
+      const title = document.getElementById('inputTitle').value.trim();
+      const category = document.getElementById('inputCategory').value;
+      const locationName = document.getElementById('inputLocation').value.trim();
+      const date = document.getElementById('inputDate').value || new Date().toISOString().split('T')[0];
+      const lat = parseFloat(document.getElementById('inputLat').value);
+      const lng = parseFloat(document.getElementById('inputLng').value);
+      const notes = document.getElementById('inputNotes').value.trim();
+
+      if (!title) return alert('请填写回忆或会议标题！');
+      if (isNaN(lat) || isNaN(lng)) return alert('请提供有效的经纬度！（可上传带定位的照片，或直接点击地球拾取坐标）');
+
+      const newItem = {
+        id: 'mem-' + Date.now(),
+        title,
+        category,
+        locationName: locationName || `${lat.toFixed(2)}°, ${lng.toFixed(2)}°`,
+        date,
+        lat,
+        lng,
+        notes,
+        imageDataUrl: tempImageDataUrl || 'https://images.unsplash.com/photo-1488646953014-85cb44e25828?auto=format&fit=crop&w=800&q=80',
+        videoDataUrl: tempVideoDataUrl || null
+      };
+
+      await saveMemoryToDB(newItem);
+      memories = await getAllMemoriesFromDB();
+
+      // 重置表单
+      tempImageDataUrl = '';
+      tempVideoDataUrl = '';
+      document.getElementById('inputTitle').value = '';
+      document.getElementById('inputLocation').value = '';
+      document.getElementById('inputNotes').value = '';
+      document.getElementById('previewImg').classList.add('hidden');
+      document.getElementById('photoUploadHint').classList.remove('opacity-0');
+      document.getElementById('videoUploadText').innerText = '关联实况视频 (可选)';
+
+      closeAddModal();
+      refreshUI();
+      focusMemory(newItem.id);
+    }
+
+    /**************************************************************
+     * 7. 巡航回放模式 (按时间轴自动飞跃各个会议/旅行点)
+     **************************************************************/
+    function startTour() {
+      if (memories.length === 0) return;
+      const btnText = document.getElementById('tourBtnText');
+
+      if (isTourPlaying) {
+        clearInterval(tourTimer);
+        isTourPlaying = false;
+        btnText.innerText = '巡航回放';
+        return;
+      }
+
+      isTourPlaying = true;
+      btnText.innerText = '停止巡航';
+      let idx = 0;
+      focusMemory(memories[idx].id);
+
+      tourTimer = setInterval(() => {
+        idx = (idx + 1) % memories.length;
+        focusMemory(memories[idx].id);
+      }, 4200);
+    }
+
+    /**************************************************************
+     * 8. JSON 备份导出与导入
+     **************************************************************/
+    async function exportData() {
+      const all = await getAllMemoriesFromDB();
+      const blob = new Blob([JSON.stringify(all, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `my-journey-backup-${new Date().toISOString().slice(0,10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    async function importData(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const text = await file.text();
+      try {
+        const list = JSON.parse(text);
+        if (!Array.isArray(list)) throw new Error('格式不正确');
+        for (const item of list) {
+          if (item.id && item.lat !== undefined && item.lng !== undefined) {
+            await saveMemoryToDB(item);
+          }
+        }
+        memories = await getAllMemoriesFromDB();
+        refreshUI();
+        alert(`🎉 成功导入 ${list.length} 条足迹记录！`);
+      } catch (e) {
+        alert('导入失败：请确认选择的是有效的备份 JSON 文件。');
+      }
+    }
+
+    async function resetDemoData() {
+      if (!confirm('这将清空当前数据并恢复初始的 4 条示例足迹，确定继续吗？')) return;
+      await clearAllMemoriesDB();
+      localStorage.removeItem('journey_initialized');
+      await initApp();
+    }
+
+    // 启动应用
+    window.addEventListener('DOMContentLoaded', initApp);
+  </script>
+</body>
+</html>
